@@ -1,0 +1,15 @@
+services:
+  scraper:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: python -m subito_scraper.main
+  bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: python -m subito_scraper.telegram_bot
