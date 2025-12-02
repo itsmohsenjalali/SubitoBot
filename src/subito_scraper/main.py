@@ -19,11 +19,6 @@ def configure_logging(level: str) -> None:
 
 def load_queries(db: Database, config: Config) -> list[SearchQuery]:
     queries = db.get_search_queries()
-    if not queries:
-        # Seed with default if table empty
-        default = SearchQuery(url=config.default_search_url, label="default")
-        db.add_search_query(default)
-        queries = [default]
     return queries
 
 
