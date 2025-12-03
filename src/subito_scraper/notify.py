@@ -17,8 +17,9 @@ def send_telegram_listings(listings: Iterable[Listing], config: Config) -> int:
     sent = 0
     for listing in listings:
         if listing.photos:
-            if _send_album(listing, config):
+            if _send_photo(listing, config):
                 sent += 1
+                time.sleep(1)
                 continue
             logging.getLogger(__name__).warning(
                 "Photo send failed; falling back to text for %s", listing.external_id
@@ -76,36 +77,6 @@ def _send_message(listing: Listing, config: Config) -> bool:
         return True
     except Exception as exc:
         logger.warning("Error sending message to Telegram: %s", exc)
-        return False
-
-
-def _send_album(listing: Listing, config: Config) -> bool:
-    """
-    Send up to 5 photos as an album with caption on first image.
-    """
-    logger = logging.getLogger(__name__)
-    photos = listing.photos[:5]
-    media = []
-    for idx, url in enumerate(photos):
-        item = {"type": "photo", "media": url}
-        if idx == 0:
-            item["caption"] = _build_caption(listing)
-            item["parse_mode"] = "HTML"
-        media.append(item)
-
-    api_url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendMediaGroup"
-    try:
-        resp = requests.post(
-            api_url,
-            json={"chat_id": config.telegram_chat_id, "media": media},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.warning("Failed to send album: %s %s", resp.status_code, resp.text)
-            return False
-        return True
-    except Exception as exc:
-        logger.warning("Error sending album to Telegram: %s", exc)
         return False
 
 

@@ -71,7 +71,7 @@ def _extract_photos(item: Dict[str, Any]) -> List[str]:
     for img in images:
         url = img.get("cdn_base_url")
         if url:
-            url = f"{url}?rule=gallery-mobile-3x-auto"
+            url = f"{url}?rule=gallery-mobile-1x-auto"
             urls.append(url)
     return urls
 
