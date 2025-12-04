@@ -1,5 +1,6 @@
 import logging
 import time
+import random
 
 from .client import SubitoClient
 from .config import Config
@@ -68,6 +69,9 @@ def run_polling_loop() -> None:
     client = SubitoClient(config)
     try:
         while True:
+            jitter = random.uniform(0, 60)
+            logger.info("Pre-loop jitter sleep: %.0fs", jitter)
+            time.sleep(jitter)
             queries = load_queries(db, config)
             process_queries(config, db, client, queries)
             sleep_for = max(config.scrape_delay, 180)
