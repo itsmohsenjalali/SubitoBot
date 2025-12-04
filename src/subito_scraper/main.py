@@ -63,20 +63,42 @@ def run_polling_loop() -> None:
     config = Config.load()
     configure_logging(config.log_level)
     logger = logging.getLogger(__name__)
-    logger.info("Starting polling loop every %ss", int(config.scrape_delay or 180))
+    logger.info("Starting polling loop target ~2-4 minutes with per-query jitter")
 
     db = Database(config.sqlite_path)
     client = SubitoClient(config)
     try:
         while True:
-            jitter = random.uniform(0, 60)
-            logger.info("Pre-loop jitter sleep: %.0fs", jitter)
-            time.sleep(jitter)
+            loop_start = time.time()
             queries = load_queries(db, config)
-            process_queries(config, db, client, queries)
-            sleep_for = max(config.scrape_delay, 180)
-            logger.info("Sleeping %ss", sleep_for)
-            time.sleep(sleep_for)
+            if queries:
+                jitter_budget = 60  # seconds max jitter per loop
+                remaining = jitter_budget
+                per_query_jitters = []
+                for i in range(len(queries)):
+                    # Allocate random jitter so total <= budget
+                    remaining_slots = len(queries) - i
+                    max_for_this = remaining if remaining_slots == 1 else remaining / remaining_slots * 2
+                    jitter = random.uniform(0, max(0, min(remaining, max_for_this)))
+                    jitter = min(jitter, remaining)
+                    remaining -= jitter
+                    per_query_jitters.append(jitter)
+
+                for query, jitter in zip(queries, per_query_jitters):
+                    if jitter > 0:
+                        logger.info("Jitter before %s: %.0fs", query.label or query.url, jitter)
+                        time.sleep(jitter)
+                    process_queries(config, db, client, [query])
+
+            # Ensure at least 120s between loop starts; cap around 240s by jitter design
+            elapsed = time.time() - loop_start
+            base_interval = 180
+            if elapsed < base_interval:
+                sleep_for = base_interval - elapsed
+                logger.info("Sleeping %.0fs to maintain min interval", sleep_for)
+                time.sleep(sleep_for)
+            else:
+                logger.info("Loop elapsed %.0fs; starting next immediately", elapsed)
     finally:
         client.close()
         db.close()
