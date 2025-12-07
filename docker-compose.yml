@@ -5,6 +5,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    restart: on-failure
     command: python -m subito_scraper.main
   bot:
     build: .
@@ -12,4 +13,5 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    restart: on-failure
     command: python -m subito_scraper.telegram_bot

@@ -25,3 +25,10 @@ class SearchQuery:
 class SeenState:
     query_id: int
     max_external_id_int: int = 0
+
+
+@dataclass
+class BlacklistWord:
+    id: int
+    query_id: int
+    word: str

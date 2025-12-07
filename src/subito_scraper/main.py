@@ -27,6 +27,7 @@ def process_queries(config: Config, db: Database, client: SubitoClient, queries:
     logger = logging.getLogger(__name__)
     for query in queries:
         max_seen = db.get_max_seen_id(query.id) if hasattr(query, "id") else 0
+        blacklist = set(word.lower() for word in db.get_blacklist_words(query.id)) if query.id else set()
         api_url = web_url_to_api(query.url, db)
         if not api_url:
             logger.warning(
@@ -39,18 +40,31 @@ def process_queries(config: Config, db: Database, client: SubitoClient, queries:
         logger.info("Fetching %s", api_url)
         data = client.fetch_items(api_url)
         listings = parse_api_response(data)
-        new_listings = [
+        # Determine new items vs max_seen
+        candidates = [
             l for l in listings if l.external_id_int is not None and l.external_id_int > max_seen
         ]
+        # Apply blacklist on title (case-insensitive substring)
+        new_listings = []
+        for l in candidates:
+            title_lower = l.title.lower()
+            if any(bw in title_lower for bw in blacklist):
+                logger.info("Skipping blacklisted title for query %s: %s", query.label or query.url, l.title)
+                continue
+            new_listings.append(l)
+
+        # Update max_seen using all candidates (even filtered) to avoid reprocessing
+        if candidates:
+            new_max = max(l.external_id_int for l in candidates if l.external_id_int is not None)
+            if new_max and query.id:
+                db.update_max_seen_id(query.id, new_max)
+                max_seen = new_max
         if not new_listings:
             logger.info("[%s] No new listings", query.label or query.url)
             continue
         # Sort oldest to newest before notifying
         new_listings.sort(key=lambda l: l.external_id_int or 0)
         sent = send_telegram_listings(new_listings, config)
-        max_seen = max([max_seen] + [l.external_id_int for l in new_listings if l.external_id_int is not None])
-        if hasattr(query, "id"):
-            db.update_max_seen_id(query.id, max_seen)
         logger.info(
             "[%s] Received %d items, sent %d new listings",
             query.label or query.url,

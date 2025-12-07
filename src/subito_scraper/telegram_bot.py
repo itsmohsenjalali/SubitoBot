@@ -91,6 +91,12 @@ def _handle_message(config: Config, db: Database, client: SubitoClient, message:
     if state and state["name"] == "edit_url":
         _handle_edit_input(config, db, client, chat_id, text, state.get("data"))
         return
+    if state and state["name"] == "add_bl_word":
+        _handle_add_blacklist_word(config, db, chat_id, text, state.get("data"))
+        return
+    if state and state["name"] == "edit_bl_word":
+        _handle_edit_blacklist_word(config, db, chat_id, text, state.get("data"))
+        return
 
     _send_text(config, chat_id, "Unknown command. Use /addurl or /urllist.")
 
@@ -104,14 +110,7 @@ def _handle_callback(config: Config, db: Database, client: SubitoClient, callbac
         if not row:
             _answer_callback(config, callback["id"], "Not found")
             return
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "Delete", "callback_data": f"delete:{query_id}"},
-                    {"text": "Edit", "callback_data": f"edit:{query_id}"},
-                ]
-            ]
-        }
+        keyboard = _query_actions_keyboard(query_id)
         _edit_message(
             config,
             chat_id,
@@ -139,6 +138,42 @@ def _handle_callback(config: Config, db: Database, client: SubitoClient, callbac
         query_id = int(data.split(":", 1)[1])
         db.set_state(chat_id, "edit_label", {"query_id": query_id})
         _send_text(config, chat_id, "Send the new label.")
+        _answer_callback(config, callback["id"])
+        return
+
+    if data.startswith("blacklist:"):
+        query_id = int(data.split(":", 1)[1])
+        _send_blacklist_list(config, db, chat_id, callback["message"]["message_id"], query_id)
+        _answer_callback(config, callback["id"])
+        return
+    if data.startswith("bladd:"):
+        query_id = int(data.split(":", 1)[1])
+        db.set_state(chat_id, "add_bl_word", {"query_id": query_id})
+        _send_text(config, chat_id, "Send the blacklist word to add.")
+        _answer_callback(config, callback["id"])
+        return
+    if data.startswith("blsel:"):
+        word_id = int(data.split(":", 1)[1])
+        _send_blacklist_word_detail(config, db, chat_id, callback["message"]["message_id"], word_id)
+        _answer_callback(config, callback["id"])
+        return
+    if data.startswith("bledit:"):
+        word_id = int(data.split(":", 1)[1])
+        db.set_state(chat_id, "edit_bl_word", {"word_id": word_id})
+        _send_text(config, chat_id, "Send the new blacklist word.")
+        _answer_callback(config, callback["id"])
+        return
+    if data.startswith("bldel:"):
+        word_id = int(data.split(":", 1)[1])
+        word = db.get_blacklist_word(word_id)
+        if word:
+            db.delete_blacklist_word(word_id)
+            _send_blacklist_list(config, db, chat_id, callback["message"]["message_id"], word.query_id, msg="Deleted.")
+        _answer_callback(config, callback["id"])
+        return
+    if data.startswith("blback:"):
+        query_id = int(data.split(":", 1)[1])
+        _send_blacklist_list(config, db, chat_id, callback["message"]["message_id"], query_id)
         _answer_callback(config, callback["id"])
         return
 
@@ -174,6 +209,71 @@ def _handle_edit_input(config: Config, db: Database, client: SubitoClient, chat_
     _prime_seen_state(config, db, client, data["query_id"], url)
     db.clear_state(chat_id)
     _send_text(config, chat_id, f"Updated:\n<b>{_escape(label)}</b>\n{_escape(url)}", parse_mode="HTML")
+
+
+def _handle_add_blacklist_word(config: Config, db: Database, chat_id: int, text: str, data: Optional[Dict]) -> None:
+    if not data or "query_id" not in data:
+        _send_text(config, chat_id, "No target. Start from Blacklist menu.")
+        return
+    word = text.strip().lower()
+    if not word:
+        _send_text(config, chat_id, "Word cannot be empty.")
+        return
+    db.add_blacklist_word(data["query_id"], word)
+    db.clear_state(chat_id)
+    _send_text(config, chat_id, f"Added blacklist word: <b>{_escape(word)}</b>", parse_mode="HTML")
+
+
+def _handle_edit_blacklist_word(config: Config, db: Database, chat_id: int, text: str, data: Optional[Dict]) -> None:
+    if not data or "word_id" not in data:
+        _send_text(config, chat_id, "No target. Start from Blacklist menu.")
+        return
+    word = text.strip().lower()
+    if not word:
+        _send_text(config, chat_id, "Word cannot be empty.")
+        return
+    db.update_blacklist_word(data["word_id"], word)
+    db.clear_state(chat_id)
+    _send_text(config, chat_id, f"Updated word to: <b>{_escape(word)}</b>", parse_mode="HTML")
+
+
+def _send_blacklist_list(config: Config, db: Database, chat_id: int, message_id: int, query_id: int, msg: Optional[str] = None) -> None:
+    words = db.get_blacklist(query_id)
+    keyboard = {"inline_keyboard": []}
+    for w in words:
+        keyboard["inline_keyboard"].append([{"text": w.word, "callback_data": f"blsel:{w.id}"}])
+    keyboard["inline_keyboard"].append([{"text": "➕ Add word", "callback_data": f"bladd:{query_id}"}])
+    text = msg or "Blacklist words:"
+    _edit_message(config, chat_id, message_id, text, keyboard)
+
+
+def _send_blacklist_word_detail(config: Config, db: Database, chat_id: int, message_id: int, word_id: int) -> None:
+    word = db.get_blacklist_word(word_id)
+    if not word:
+        _edit_message(config, chat_id, message_id, "Not found", None)
+        return
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✏️ Edit", "callback_data": f"bledit:{word_id}"},
+                {"text": "🗑 Delete", "callback_data": f"bldel:{word_id}"},
+            ],
+            [{"text": "⬅️ Back", "callback_data": f"blback:{word.query_id}"}],
+        ]
+    }
+    _edit_message(config, chat_id, message_id, f"Word: <b>{_escape(word.word)}</b>", keyboard)
+
+
+def _query_actions_keyboard(query_id: int) -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "Delete", "callback_data": f"delete:{query_id}"},
+                {"text": "Edit", "callback_data": f"edit:{query_id}"},
+                {"text": "Blacklist", "callback_data": f"blacklist:{query_id}"},
+            ]
+        ]
+    }
 
 
 def _prime_seen_state(config: Config, db: Database, client: SubitoClient, query_id: int, url: str) -> None:

@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from .models import Listing, SearchQuery
+from .models import Listing, SearchQuery, BlacklistWord
 
 
 class Database:
@@ -51,6 +51,18 @@ class Database:
                 chat_id INTEGER PRIMARY KEY,
                 name TEXT,
                 data TEXT
+            )
+            """
+        )
+        # Blacklist words per query
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blacklist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_id INTEGER NOT NULL,
+                word TEXT NOT NULL,
+                FOREIGN KEY(query_id) REFERENCES search_queries(id) ON DELETE CASCADE,
+                UNIQUE(query_id, word)
             )
             """
         )
@@ -180,3 +192,49 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    # Blacklist helpers
+    def add_blacklist_word(self, query_id: int, word: str) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO blacklist (query_id, word)
+            VALUES (?, ?)
+            """,
+            (query_id, word),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def update_blacklist_word(self, word_id: int, word: str) -> None:
+        self.conn.execute(
+            "UPDATE blacklist SET word = ? WHERE id = ?",
+            (word, word_id),
+        )
+        self.conn.commit()
+
+    def delete_blacklist_word(self, word_id: int) -> None:
+        self.conn.execute("DELETE FROM blacklist WHERE id = ?", (word_id,))
+        self.conn.commit()
+
+    def get_blacklist(self, query_id: int) -> List[BlacklistWord]:
+        rows = self.conn.execute(
+            "SELECT id, query_id, word FROM blacklist WHERE query_id = ? ORDER BY word ASC",
+            (query_id,),
+        ).fetchall()
+        return [BlacklistWord(id=row["id"], query_id=row["query_id"], word=row["word"]) for row in rows]
+
+    def get_blacklist_words(self, query_id: int) -> List[str]:
+        rows = self.conn.execute(
+            "SELECT word FROM blacklist WHERE query_id = ?",
+            (query_id,),
+        ).fetchall()
+        return [row["word"] for row in rows]
+
+    def get_blacklist_word(self, word_id: int) -> Optional[BlacklistWord]:
+        row = self.conn.execute(
+            "SELECT id, query_id, word FROM blacklist WHERE id = ?",
+            (word_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return BlacklistWord(id=row["id"], query_id=row["query_id"], word=row["word"])
