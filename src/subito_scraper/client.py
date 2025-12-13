@@ -40,10 +40,13 @@ class SubitoClient:
 
     def _user_agent(self) -> str:
         if self.ua_rotator:
-            try:
-                return self.ua_rotator.get_random_user_agent()
-            except Exception:
-                pass
+            for _ in range(5):
+                try:
+                    ua = self.ua_rotator.get_random_user_agent()
+                    if ua and "google web preview" not in ua.lower():
+                        return ua
+                except Exception:
+                    break
         return self.config.user_agent
 
     def fetch_items(self, url: str) -> Dict[str, Any]:
