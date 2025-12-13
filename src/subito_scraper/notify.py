@@ -1,5 +1,5 @@
 import logging
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 import time
 import requests
 
@@ -7,8 +7,10 @@ from .config import Config
 from .models import Listing
 
 
-def send_telegram_listings(listings: Iterable[Listing], config: Config) -> int:
-    if not config.telegram_bot_token or not config.telegram_chat_id:
+def send_telegram_listings(listings: Iterable[Listing], config: Config, chat_id: Optional[str] = None, bot_token: Optional[str] = None) -> int:
+    target_token = bot_token or config.telegram_bot_token
+    target_chat = chat_id or config.telegram_chat_id
+    if not target_token or not target_chat:
         logging.getLogger(__name__).warning(
             "Telegram credentials missing; skipping %d listings", len(listings)
         )
@@ -17,14 +19,14 @@ def send_telegram_listings(listings: Iterable[Listing], config: Config) -> int:
     sent = 0
     for listing in listings:
         if listing.photos:
-            if _send_photo(listing, config):
+            if _send_photo(listing, target_token, target_chat):
                 sent += 1
                 time.sleep(1)
                 continue
             logging.getLogger(__name__).warning(
                 "Photo send failed; falling back to text for %s", listing.external_id
             )
-        if _send_message(listing, config):
+        if _send_message(listing, target_token, target_chat):
             sent += 1
         time.sleep(1)
     return sent
@@ -40,11 +42,11 @@ def _build_caption(listing: Listing) -> str:
     return "\n".join(parts)
 
 
-def _send_photo(listing: Listing, config: Config) -> bool:
+def _send_photo(listing: Listing, token: str, chat_id: str) -> bool:
     logger = logging.getLogger(__name__)
-    url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendPhoto"
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
     payload = {
-        "chat_id": config.telegram_chat_id,
+        "chat_id": chat_id,
         "photo": listing.photos[0],
         "caption": _build_caption(listing),
         "parse_mode": "HTML",
@@ -60,11 +62,11 @@ def _send_photo(listing: Listing, config: Config) -> bool:
         return False
 
 
-def _send_message(listing: Listing, config: Config) -> bool:
+def _send_message(listing: Listing, token: str, chat_id: str) -> bool:
     logger = logging.getLogger(__name__)
-    url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
-        "chat_id": config.telegram_chat_id,
+        "chat_id": chat_id,
         "text": _build_caption(listing),
         "parse_mode": "HTML",
         "disable_web_page_preview": False,

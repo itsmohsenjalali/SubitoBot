@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from .models import Listing, SearchQuery, BlacklistWord
+from .models import Listing, SearchQuery, BlacklistWord, WatchlistItem
 
 
 class Database:
@@ -29,11 +29,24 @@ class Database:
             """
             CREATE TABLE IF NOT EXISTS search_queries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL UNIQUE,
-                label TEXT
+                url TEXT NOT NULL,
+                label TEXT,
+                kind TEXT DEFAULT 'default',
+                UNIQUE(url, kind)
             )
             """
         )
+        # migrate existing search_queries to ensure kind column and unique index
+        try:
+            self.conn.execute("ALTER TABLE search_queries ADD COLUMN kind TEXT DEFAULT 'default'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_search_queries_url_kind ON search_queries (url, kind)"
+            )
+        except sqlite3.OperationalError:
+            pass
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS seen_state (
@@ -44,16 +57,33 @@ class Database:
             """
         )
         self.conn.commit()
-        # State for Telegram chat interactions
+        # State for Telegram chat interactions (per bot kind)
         self.conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS telegram_state (
-                chat_id INTEGER PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS telegram_state_v2 (
+                chat_id INTEGER NOT NULL,
+                bot_kind TEXT NOT NULL DEFAULT 'default',
                 name TEXT,
-                data TEXT
+                data TEXT,
+                PRIMARY KEY (chat_id, bot_kind)
             )
             """
         )
+        # migrate legacy telegram_state -> telegram_state_v2
+        try:
+            rows = self.conn.execute("SELECT chat_id, name, data FROM telegram_state").fetchall()
+            for row in rows:
+                self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO telegram_state_v2 (chat_id, bot_kind, name, data)
+                    VALUES (?, 'default', ?, ?)
+                    """,
+                    (row["chat_id"], row["name"], row["data"]),
+                )
+            self.conn.execute("DROP TABLE telegram_state")
+        except sqlite3.OperationalError:
+            pass
+        self.conn.commit()
         # Blacklist words per query
         self.conn.execute(
             """
@@ -63,6 +93,16 @@ class Database:
                 word TEXT NOT NULL,
                 FOREIGN KEY(query_id) REFERENCES search_queries(id) ON DELETE CASCADE,
                 UNIQUE(query_id, word)
+            )
+            """
+        )
+        # Watchlist items for sold checks
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS watchlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id TEXT UNIQUE,
+                stored_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -86,24 +126,28 @@ class Database:
         )
         self.conn.commit()
 
-    def set_state(self, chat_id: int, name: str, data: Optional[dict]) -> None:
+    def set_state(self, chat_id: int, name: str, data: Optional[dict], bot_kind: str = "default") -> None:
         self.conn.execute(
             """
-            INSERT INTO telegram_state (chat_id, name, data)
-            VALUES (?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET name=excluded.name, data=excluded.data
+            INSERT INTO telegram_state_v2 (chat_id, bot_kind, name, data)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id, bot_kind) DO UPDATE SET name=excluded.name, data=excluded.data
             """,
-            (chat_id, name, json.dumps(data) if data else None),
+            (chat_id, bot_kind, name, json.dumps(data) if data else None),
         )
         self.conn.commit()
 
-    def clear_state(self, chat_id: int) -> None:
-        self.conn.execute("DELETE FROM telegram_state WHERE chat_id = ?", (chat_id,))
+    def clear_state(self, chat_id: int, bot_kind: str = "default") -> None:
+        self.conn.execute(
+            "DELETE FROM telegram_state_v2 WHERE chat_id = ? AND bot_kind = ?",
+            (chat_id, bot_kind),
+        )
         self.conn.commit()
 
-    def get_state(self, chat_id: int) -> Optional[dict]:
+    def get_state(self, chat_id: int, bot_kind: str = "default") -> Optional[dict]:
         row = self.conn.execute(
-            "SELECT name, data FROM telegram_state WHERE chat_id = ?", (chat_id,)
+            "SELECT name, data FROM telegram_state_v2 WHERE chat_id = ? AND bot_kind = ?",
+            (chat_id, bot_kind),
         ).fetchone()
         if not row:
             return None
@@ -118,30 +162,60 @@ class Database:
     def add_search_query(self, query: SearchQuery) -> None:
         self.conn.execute(
             """
-            INSERT OR IGNORE INTO search_queries (url, label)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO search_queries (url, label, kind)
+            VALUES (?, ?, ?)
             """,
-            (query.url, query.label),
+            (query.url, query.label, query.kind),
         )
         self.conn.commit()
 
-    def add_search_query_record(self, url: str, label: Optional[str]) -> int:
+    def add_search_query_record(self, url: str, label: Optional[str], kind: str = "default") -> int:
         cursor = self.conn.execute(
             """
-            INSERT OR IGNORE INTO search_queries (url, label)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO search_queries (url, label, kind)
+            VALUES (?, ?, ?)
             """,
-            (url, label),
+            (url, label, kind),
         )
         self.conn.commit()
         return cursor.lastrowid
 
-    def update_search_query(self, query_id: int, url: str, label: Optional[str]) -> None:
+    # Watchlist helpers
+    def add_watchlist_items(self, external_ids: List[str]) -> int:
+        cursor = self.conn.executemany(
+            """
+            INSERT OR IGNORE INTO watchlist_items (external_id)
+            VALUES (?)
+            """,
+            [(eid,) for eid in external_ids],
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_watchlist_ids(self) -> List[str]:
+        rows = self.conn.execute("SELECT external_id FROM watchlist_items").fetchall()
+        return [r["external_id"] for r in rows]
+
+    def remove_watchlist_items(self, external_ids: List[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM watchlist_items WHERE external_id = ?",
+            [(eid,) for eid in external_ids],
+        )
+        self.conn.commit()
+
+    def remove_watchlist_items(self, external_ids: List[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM watchlist_items WHERE external_id = ?",
+            [(eid,) for eid in external_ids],
+        )
+        self.conn.commit()
+
+    def update_search_query(self, query_id: int, url: str, label: Optional[str], kind: Optional[str] = None) -> None:
         self.conn.execute(
             """
-            UPDATE search_queries SET url = ?, label = ? WHERE id = ?
+            UPDATE search_queries SET url = ?, label = ?, kind = COALESCE(?, kind) WHERE id = ?
             """,
-            (url, label, query_id),
+            (url, label, kind, query_id),
         )
         self.conn.commit()
 
@@ -154,18 +228,25 @@ class Database:
 
     def get_search_query(self, query_id: int) -> Optional[SearchQuery]:
         row = self.conn.execute(
-            "SELECT id, url, label FROM search_queries WHERE id = ?",
+            "SELECT id, url, label, kind FROM search_queries WHERE id = ?",
             (query_id,),
         ).fetchone()
         if not row:
             return None
-        return SearchQuery(url=row["url"], label=row["label"], id=row["id"])
+        return SearchQuery(url=row["url"], label=row["label"], id=row["id"], kind=row["kind"])
 
     def get_search_queries(self) -> List[SearchQuery]:
         rows = self.conn.execute(
-            "SELECT id, url, label FROM search_queries ORDER BY id ASC"
+            "SELECT id, url, label, kind FROM search_queries ORDER BY id ASC"
         ).fetchall()
-        return [SearchQuery(id=row["id"], url=row["url"], label=row["label"]) for row in rows]
+        return [SearchQuery(id=row["id"], url=row["url"], label=row["label"], kind=row["kind"]) for row in rows]
+
+    def get_search_queries_by_kind(self, kind: str) -> List[SearchQuery]:
+        rows = self.conn.execute(
+            "SELECT id, url, label, kind FROM search_queries WHERE kind = ? ORDER BY id ASC",
+            (kind,),
+        ).fetchall()
+        return [SearchQuery(id=row["id"], url=row["url"], label=row["label"], kind=row["kind"]) for row in rows]
 
     def get_default_query(self) -> Optional[SearchQuery]:
         queries = self.get_search_queries()
@@ -238,3 +319,7 @@ class Database:
         if not row:
             return None
         return BlacklistWord(id=row["id"], query_id=row["query_id"], word=row["word"])
+
+    def get_watchlist_items(self) -> List[WatchlistItem]:
+        rows = self.conn.execute("SELECT external_id, stored_at FROM watchlist_items").fetchall()
+        return [WatchlistItem(external_id=row["external_id"], stored_at=row["stored_at"]) for row in rows]

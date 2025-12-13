@@ -22,6 +22,7 @@ def parse_api_response(data: Dict[str, Any]) -> List[Listing]:
             location=_extract_location(item),
             posted_at=_extract_posted_at(item),
             photos=_extract_photos(item),
+            transaction_status=_extract_transaction_status(item),
         )
         listings.append(listing)
 
@@ -81,3 +82,14 @@ def _to_int(value: str) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_transaction_status(item: Dict[str, Any]) -> Optional[str]:
+    features = item.get("features") or []
+    for feature in features:
+        if feature.get("uri") == "/transaction_status":
+            values = feature.get("values") or []
+            if values:
+                if values[0].get("key") == "CLOSED":
+                    return values[0].get("value")
+    return None

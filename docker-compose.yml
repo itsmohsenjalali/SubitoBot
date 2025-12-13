@@ -15,3 +15,11 @@ services:
       - ./data:/app/data
     restart: on-failure
     command: python -m subito_scraper.telegram_bot
+  bot_watchlist:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: on-failure
+    command: python -c "from subito_scraper.telegram_bot import run_bot; run_bot(kind='watchlist')"

@@ -16,6 +16,8 @@ class Config:
     log_level: str
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_wa_bot_token: str
+    telegram_wa_chat_id: str
 
     @property
     def base_url(self) -> str:
@@ -41,4 +43,6 @@ class Config:
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+            telegram_wa_bot_token=os.getenv("TELEGRAM_WA_BOT_TOKEN", ""),
+            telegram_wa_chat_id=os.getenv("TELEGRAM_WA_CHAT_ID", ""),
         )
