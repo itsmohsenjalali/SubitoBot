@@ -121,7 +121,7 @@ def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None
         logger.info("Sold checker: no watchlist items.")
         return
     logger.info("Sold checker: checking %d items", len(ids))
-    batch_size = 80
+    batch_size = 28
     sold_ids = []
     for i in range(0, len(ids), batch_size):
         batch = ids[i : i + batch_size]
@@ -158,7 +158,7 @@ def run_polling_loop() -> None:
     db = Database(config.sqlite_path)
     client = SubitoClient(config)
     last_sold_check = time.time()
-    sold_check_interval = 6 * 3600  # 6 hours
+    sold_check_interval = config.sold_check_interval_seconds
     try:
         while True:
             loop_start = time.time()

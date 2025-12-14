@@ -90,6 +90,5 @@ def _extract_transaction_status(item: Dict[str, Any]) -> Optional[str]:
         if feature.get("uri") == "/transaction_status":
             values = feature.get("values") or []
             if values:
-                if values[0].get("key") == "CLOSED":
-                    return values[0].get("value")
+                return values[0].get("value")
     return None

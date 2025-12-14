@@ -18,6 +18,7 @@ class Config:
     telegram_chat_id: str
     telegram_wa_bot_token: str
     telegram_wa_chat_id: str
+    sold_check_interval_seconds: int
 
     @property
     def base_url(self) -> str:
@@ -45,4 +46,5 @@ class Config:
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
             telegram_wa_bot_token=os.getenv("TELEGRAM_WA_BOT_TOKEN", ""),
             telegram_wa_chat_id=os.getenv("TELEGRAM_WA_CHAT_ID", ""),
+            sold_check_interval_seconds=int(os.getenv("SOLD_CHECK_INTERVAL_SECONDS", str(6 * 3600))),
         )
