@@ -34,7 +34,8 @@ def send_telegram_listings(listings: Iterable[Listing], config: Config, chat_id:
 
 def _build_caption(listing: Listing) -> str:
     parts: List[str] = []
-    parts.append(f"📦 <b><a href=\"{_escape(listing.url)}\">{_escape(listing.title)}</a></b>")
+    label = f"[{_escape(listing.search_label)}] " if listing.search_label else ""
+    parts.append(f"📦 {label}<b><a href=\"{_escape(listing.url)}\">{_escape(listing.title)}</a></b>")
     if listing.price:
         parts.append(f"💰 <b>{_escape(listing.price)}</b>")
     if listing.posted_at:

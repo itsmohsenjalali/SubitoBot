@@ -5,7 +5,7 @@ import random
 from .client import SubitoClient
 from .config import Config
 from .db import Database
-from .models import SearchQuery
+from .models import SearchQuery, WatchlistItem
 from .parser import parse_api_response
 from .notify import send_telegram_listings
 from .url_builder import web_url_to_api
@@ -63,6 +63,8 @@ def process_queries(config: Config, db: Database, client: SubitoClient, queries:
             continue
         # Sort oldest to newest before notifying
         new_listings.sort(key=lambda l: l.external_id_int or 0)
+        for l in new_listings:
+            l.search_label = query.label
         sent = send_telegram_listings(new_listings, config)
         logger.info(
             "[%s] Received %d items, sent %d new listings",
@@ -110,16 +112,18 @@ def process_watchlist_queries(config: Config, db: Database, client: SubitoClient
             logger.info("[%s] No new watchlist items", query.label or query.url)
             continue
 
-        db.add_watchlist_items([l.external_id for l in filtered])
+        db.add_watchlist_items([WatchlistItem(external_id=l.external_id, search_label=query.label) for l in filtered])
         logger.info("[%s] Added %d items to watchlist", query.label or query.url, len(filtered))
 
 
 def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None:
     logger = logging.getLogger(__name__)
-    ids = db.get_watchlist_ids()
-    if not ids:
+    items = db.get_watchlist_items()
+    if not items:
         logger.info("Sold checker: no watchlist items.")
         return
+    ids = [w.external_id for w in items]
+    label_map = {w.external_id: w.search_label for w in items}
     logger.info("Sold checker: checking %d items", len(ids))
     batch_size = 28
     sold_ids = []
@@ -131,6 +135,7 @@ def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None
             listings = parse_api_response(data)
             for l in listings:
                 if (l.transaction_status or "").upper() == "SOLD":
+                    l.search_label = label_map.get(l.external_id)
                     sold_ids.append(l)
         except Exception as exc:
             logger.warning("Sold checker batch failed: %s", exc)
@@ -140,8 +145,8 @@ def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None
         send_telegram_listings(
             sold_ids,
             config,
-            chat_id=config.telegram_wa_chat_id,
-            bot_token=config.telegram_wa_bot_token,
+            chat_id=config.telegram_wa_chat_id or config.telegram_chat_id,
+            bot_token=config.telegram_wa_bot_token or config.telegram_bot_token,
         )
         db.remove_watchlist_items([l.external_id for l in sold_ids])
         logger.info("Sold checker: notified %d sold items", len(sold_ids))

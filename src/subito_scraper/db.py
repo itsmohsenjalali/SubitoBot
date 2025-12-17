@@ -102,10 +102,16 @@ class Database:
             CREATE TABLE IF NOT EXISTS watchlist_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 external_id TEXT UNIQUE,
-                stored_at TEXT DEFAULT CURRENT_TIMESTAMP
+                stored_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                search_label TEXT
             )
             """
         )
+        # migrate if column missing
+        try:
+            self.conn.execute("ALTER TABLE watchlist_items ADD COLUMN search_label TEXT")
+        except sqlite3.OperationalError:
+            pass
         self.conn.commit()
 
     def get_max_seen_id(self, query_id: int) -> int:
@@ -181,13 +187,13 @@ class Database:
         return cursor.lastrowid
 
     # Watchlist helpers
-    def add_watchlist_items(self, external_ids: List[str]) -> int:
+    def add_watchlist_items(self, items: List[WatchlistItem]) -> int:
         cursor = self.conn.executemany(
             """
-            INSERT OR IGNORE INTO watchlist_items (external_id)
-            VALUES (?)
+            INSERT OR IGNORE INTO watchlist_items (external_id, search_label)
+            VALUES (?, ?)
             """,
-            [(eid,) for eid in external_ids],
+            [(item.external_id, item.search_label) for item in items],
         )
         self.conn.commit()
         return cursor.rowcount
@@ -321,5 +327,5 @@ class Database:
         return BlacklistWord(id=row["id"], query_id=row["query_id"], word=row["word"])
 
     def get_watchlist_items(self) -> List[WatchlistItem]:
-        rows = self.conn.execute("SELECT external_id, stored_at FROM watchlist_items").fetchall()
-        return [WatchlistItem(external_id=row["external_id"], stored_at=row["stored_at"]) for row in rows]
+        rows = self.conn.execute("SELECT external_id, stored_at, search_label FROM watchlist_items").fetchall()
+        return [WatchlistItem(external_id=row["external_id"], stored_at=row["stored_at"], search_label=row["search_label"]) for row in rows]

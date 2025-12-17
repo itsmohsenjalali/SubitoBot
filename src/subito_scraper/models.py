@@ -13,6 +13,7 @@ class Listing:
     posted_at: Optional[str] = None
     photos: List[str] = field(default_factory=list)
     transaction_status: Optional[str] = None
+    search_label: Optional[str] = None
 
 
 @dataclass
@@ -27,6 +28,7 @@ class SearchQuery:
 class WatchlistItem:
     external_id: str
     stored_at: Optional[str] = None
+    search_label: Optional[str] = None
 
 
 @dataclass
