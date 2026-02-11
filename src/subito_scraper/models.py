@@ -27,6 +27,7 @@ class SearchQuery:
 @dataclass
 class WatchlistItem:
     external_id: str
+    query_id: Optional[int] = None
     stored_at: Optional[str] = None
     search_label: Optional[str] = None
 

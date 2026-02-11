@@ -96,20 +96,48 @@ class Database:
             )
             """
         )
-        # Watchlist items for sold checks
+        # Watchlist items for sold checks (per query)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS watchlist_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                external_id TEXT UNIQUE,
+                query_id INTEGER,
+                external_id TEXT NOT NULL,
                 stored_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                search_label TEXT
+                search_label TEXT,
+                FOREIGN KEY(query_id) REFERENCES search_queries(id) ON DELETE CASCADE,
+                UNIQUE(query_id, external_id)
             )
             """
         )
-        # migrate if column missing
+        # migrate legacy watchlist_items (no query_id) into v2 schema
         try:
-            self.conn.execute("ALTER TABLE watchlist_items ADD COLUMN search_label TEXT")
+            cols = [
+                row["name"]
+                for row in self.conn.execute("PRAGMA table_info(watchlist_items)").fetchall()
+            ]
+            if "query_id" not in cols:
+                self.conn.execute("ALTER TABLE watchlist_items RENAME TO watchlist_items_old")
+                self.conn.execute(
+                    """
+                    CREATE TABLE watchlist_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query_id INTEGER,
+                        external_id TEXT NOT NULL,
+                        stored_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        search_label TEXT,
+                        FOREIGN KEY(query_id) REFERENCES search_queries(id) ON DELETE CASCADE,
+                        UNIQUE(query_id, external_id)
+                    )
+                    """
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO watchlist_items (external_id, stored_at, search_label)
+                    SELECT external_id, stored_at, search_label FROM watchlist_items_old
+                    """
+                )
+                self.conn.execute("DROP TABLE watchlist_items_old")
         except sqlite3.OperationalError:
             pass
         self.conn.commit()
@@ -190,30 +218,23 @@ class Database:
     def add_watchlist_items(self, items: List[WatchlistItem]) -> int:
         cursor = self.conn.executemany(
             """
-            INSERT OR IGNORE INTO watchlist_items (external_id, search_label)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO watchlist_items (query_id, external_id, search_label)
+            VALUES (?, ?, ?)
             """,
-            [(item.external_id, item.search_label) for item in items],
+            [(item.query_id, item.external_id, item.search_label) for item in items],
         )
         self.conn.commit()
         return cursor.rowcount
 
-    def get_watchlist_ids(self) -> List[str]:
-        rows = self.conn.execute("SELECT external_id FROM watchlist_items").fetchall()
-        return [r["external_id"] for r in rows]
-
-    def remove_watchlist_items(self, external_ids: List[str]) -> None:
+    def remove_watchlist_items(self, pairs: List[tuple[int, str]]) -> None:
         self.conn.executemany(
-            "DELETE FROM watchlist_items WHERE external_id = ?",
-            [(eid,) for eid in external_ids],
+            "DELETE FROM watchlist_items WHERE query_id = ? AND external_id = ?",
+            pairs,
         )
         self.conn.commit()
 
-    def remove_watchlist_items(self, external_ids: List[str]) -> None:
-        self.conn.executemany(
-            "DELETE FROM watchlist_items WHERE external_id = ?",
-            [(eid,) for eid in external_ids],
-        )
+    def remove_orphan_watchlist_items(self) -> None:
+        self.conn.execute("DELETE FROM watchlist_items WHERE query_id IS NULL")
         self.conn.commit()
 
     def update_search_query(self, query_id: int, url: str, label: Optional[str], kind: Optional[str] = None) -> None:
@@ -327,5 +348,15 @@ class Database:
         return BlacklistWord(id=row["id"], query_id=row["query_id"], word=row["word"])
 
     def get_watchlist_items(self) -> List[WatchlistItem]:
-        rows = self.conn.execute("SELECT external_id, stored_at, search_label FROM watchlist_items").fetchall()
-        return [WatchlistItem(external_id=row["external_id"], stored_at=row["stored_at"], search_label=row["search_label"]) for row in rows]
+        rows = self.conn.execute(
+            "SELECT query_id, external_id, stored_at, search_label FROM watchlist_items"
+        ).fetchall()
+        return [
+            WatchlistItem(
+                external_id=row["external_id"],
+                query_id=row["query_id"],
+                stored_at=row["stored_at"],
+                search_label=row["search_label"],
+            )
+            for row in rows
+        ]

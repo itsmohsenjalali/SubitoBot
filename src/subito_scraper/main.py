@@ -1,6 +1,7 @@
 import logging
 import time
 import random
+from dataclasses import replace
 
 from .client import SubitoClient
 from .config import Config
@@ -112,7 +113,16 @@ def process_watchlist_queries(config: Config, db: Database, client: SubitoClient
             logger.info("[%s] No new watchlist items", query.label or query.url)
             continue
 
-        db.add_watchlist_items([WatchlistItem(external_id=l.external_id, search_label=query.label) for l in filtered])
+        db.add_watchlist_items(
+            [
+                WatchlistItem(
+                    external_id=l.external_id,
+                    query_id=query.id,
+                    search_label=query.label,
+                )
+                for l in filtered
+            ]
+        )
         logger.info("[%s] Added %d items to watchlist", query.label or query.url, len(filtered))
 
 
@@ -122,11 +132,28 @@ def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None
     if not items:
         logger.info("Sold checker: no watchlist items.")
         return
+
+    # Remove orphaned rows without query_id
+    if any(w.query_id is None for w in items):
+        db.remove_orphan_watchlist_items()
+        items = [w for w in items if w.query_id is not None]
+        if not items:
+            logger.info("Sold checker: no valid watchlist items.")
+            return
+
     ids = [w.external_id for w in items]
-    label_map = {w.external_id: w.search_label for w in items}
+    entries_by_id: dict[str, list[WatchlistItem]] = {}
+    for w in items:
+        entries_by_id.setdefault(w.external_id, []).append(w)
+
+    # Cache blacklist per query
+    blacklist_cache: dict[int, set[str]] = {}
+
     logger.info("Sold checker: checking %d items", len(ids))
     batch_size = 28
-    sold_ids = []
+    notify_listings = []
+    remove_pairs: list[tuple[int, str]] = []
+
     for i in range(0, len(ids), batch_size):
         batch = ids[i : i + batch_size]
         url = f"https://hades.subito.it/v1/search/items?list_ids={','.join(batch)}"
@@ -134,22 +161,37 @@ def run_sold_checker(config: Config, db: Database, client: SubitoClient) -> None
             data = client.fetch_items(url)
             listings = parse_api_response(data)
             for l in listings:
-                if (l.transaction_status or "").upper() == "SOLD":
-                    l.search_label = label_map.get(l.external_id)
-                    sold_ids.append(l)
+                if l.external_id not in entries_by_id:
+                    continue
+                for entry in entries_by_id[l.external_id]:
+                    if entry.query_id is None:
+                        continue
+                    if entry.query_id not in blacklist_cache:
+                        blacklist_cache[entry.query_id] = set(
+                            w.lower() for w in db.get_blacklist_words(entry.query_id)
+                        )
+                    blacklist = blacklist_cache[entry.query_id]
+                    if any(bw in l.title.lower() for bw in blacklist):
+                        remove_pairs.append((entry.query_id, entry.external_id))
+                        continue
+                    if (l.transaction_status or "").upper() == "SOLD":
+                        notify_listings.append(replace(l, search_label=entry.search_label))
+                        remove_pairs.append((entry.query_id, entry.external_id))
         except Exception as exc:
             logger.warning("Sold checker batch failed: %s", exc)
             continue
 
-    if sold_ids:
+    if remove_pairs:
+        db.remove_watchlist_items(remove_pairs)
+
+    if notify_listings:
         send_telegram_listings(
-            sold_ids,
+            notify_listings,
             config,
             chat_id=config.telegram_wa_chat_id or config.telegram_chat_id,
             bot_token=config.telegram_wa_bot_token or config.telegram_bot_token,
         )
-        db.remove_watchlist_items([l.external_id for l in sold_ids])
-        logger.info("Sold checker: notified %d sold items", len(sold_ids))
+        logger.info("Sold checker: notified %d sold items", len(notify_listings))
     else:
         logger.info("Sold checker: no sold items detected")
 
